@@ -2,14 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import Map, { Marker, NavigationControl, type MapRef } from "react-map-gl/mapbox"
-import type { Coordinates, Hospital } from "./types"
+import type { Coordinates, DemoStatus, Hospital } from "./types"
 
 const DEFAULT_CENTER: Coordinates = { lat: 37.6688, lng: -122.0808, city: "Hayward, CA" }
 
 interface MapPanelProps {
   targetCoords: Coordinates
   hospitals: Hospital[]
-  status: "idle" | "recording" | "analyzing" | "speaking" | "done" | "error"
+  status: DemoStatus
 }
 
 export function MapPanel({ targetCoords, hospitals, status }: MapPanelProps) {

@@ -4,7 +4,9 @@ import { useCallback, useMemo, useRef, useState } from "react"
 import { MapPanel } from "@/components/dashboard/map-panel"
 import { RightSidebar } from "@/components/dashboard/right-sidebar"
 import { KnowledgeGraph } from "@/components/dashboard/knowledge-graph"
-import type { Coordinates, DemoStatus, GraphState, Hospital } from "@/components/dashboard/types"
+import { OmiPanel } from "@/components/dashboard/omi-panel"
+import type { Coordinates, DemoStatus, GraphState, Hospital, AudioSource } from "@/components/dashboard/types"
+import type { OmiAudioEvent } from "@/lib/omi-store"
 
 const HAYWARD: Coordinates = { lat: 37.6688, lng: -122.0808, city: "Hayward, CA" }
 
@@ -29,6 +31,8 @@ export default function VocoDashboard() {
   const [targetCoords, setTargetCoords] = useState<Coordinates>(HAYWARD)
   const [hospitals, setHospitals] = useState<Hospital[]>(defaultHospitals)
   const [errorMessage, setErrorMessage] = useState("")
+  const [audioSource, setAudioSource] = useState<AudioSource>("microphone")
+  const [omiTranscript, setOmiTranscript] = useState("")
 
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -39,6 +43,7 @@ export default function VocoDashboard() {
     if (status === "speaking") return "Playing response..."
     if (status === "done") return "Hold to speak again"
     if (status === "error") return "Retry hold-to-speak"
+    if (status === "omi-listening") return "OMI Active"
     return "Hold to Speak"
   }, [status])
 
@@ -116,6 +121,60 @@ export default function VocoDashboard() {
     }
   }, [])
 
+  // Handle OMI events - update dashboard when OMI audio is processed
+  const handleOmiEvent = useCallback((event: OmiAudioEvent) => {
+    console.log("[Dashboard] OMI Event received:", event.status, event.id)
+    
+    if (event.status === "received") {
+      setStatus("omi-listening")
+      setGraphState("audio")
+      setAudioSource("omi")
+      setMonologueLines(["Receiving audio from OMI device..."])
+    } else if (event.status === "processing") {
+      setStatus("analyzing")
+      setGraphState("thinking")
+      setAudioSource("omi")
+      setMonologueLines(["Processing OMI audio through Gemini..."])
+    } else if (event.status === "completed" && event.analysis) {
+      console.log("[Dashboard] Setting monologue:", event.analysis.internalMonologue)
+      console.log("[Dashboard] Setting voice response:", event.analysis.voiceResponse?.substring(0, 50))
+      
+      setAudioSource("omi")
+      setMonologueLines(event.analysis.internalMonologue || [])
+      setVoiceResponse(event.analysis.voiceResponse || "")
+      setOmiTranscript(event.analysis.transcript || "")
+      
+      if (event.analysis.location) {
+        setTargetCoords(event.analysis.location)
+      }
+      
+      setStatus("done")
+      setGraphState("notified")
+
+      // Auto-play TTS for OMI events if voice response is available
+      if (event.analysis.voiceResponse) {
+        console.log("[Dashboard] Playing TTS for voice response...")
+        setStatus("speaking")
+        setGraphState("tts")
+        playElevenLabsAudio(event.analysis.voiceResponse)
+          .then(() => {
+            console.log("[Dashboard] TTS playback completed")
+            setStatus("done")
+            setGraphState("notified")
+          })
+          .catch((err) => {
+            console.error("[Dashboard] TTS playback error:", err)
+            setStatus("done")
+            setGraphState("notified")
+          })
+      }
+    } else if (event.status === "error") {
+      setStatus("error")
+      setGraphState("idle")
+      setErrorMessage(event.error || "OMI processing failed")
+    }
+  }, [playElevenLabsAudio])
+
   const processAudio = useCallback(
     async (blob: Blob) => {
       setStatus("analyzing")
@@ -123,6 +182,7 @@ export default function VocoDashboard() {
       setErrorMessage("")
       setMonologueLines([])
       setVoiceResponse("")
+      setAudioSource("microphone")
 
       const audioBase64 = await toBase64(blob)
       const response = await fetch("/api/process", {
@@ -197,11 +257,39 @@ export default function VocoDashboard() {
           </div>
           <KnowledgeGraph graphState={graphState} />
         </main>
-        <RightSidebar status={status} monologueLines={monologueLines} voiceResponse={voiceResponse} />
+
+        {/* Right side: Sidebar + OMI Panel */}
+        <div className="flex flex-col w-[40%] min-w-[360px]">
+          <RightSidebar status={status} monologueLines={monologueLines} voiceResponse={voiceResponse} />
+          
+          {/* OMI Panel - shows real-time OMI device status */}
+          <div className="border-t border-border p-3 bg-card/50">
+            <OmiPanel onEventReceived={handleOmiEvent} />
+            
+            {/* Show OMI transcript if available */}
+            {omiTranscript && audioSource === "omi" && (
+              <div className="mt-3 p-3 bg-background/50 rounded border border-border">
+                <p className="text-xs text-muted-foreground mb-1">OMI Transcript:</p>
+                <p className="text-sm text-foreground">{omiTranscript}</p>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2">
         <div className="pointer-events-auto flex flex-col items-center gap-2">
+          {/* Audio source indicator */}
+          <div className="flex items-center gap-2 mb-2">
+            <span className={`text-xs uppercase tracking-wider ${audioSource === "microphone" ? "text-primary" : "text-muted-foreground"}`}>
+              Microphone
+            </span>
+            <span className="text-xs text-muted-foreground">|</span>
+            <span className={`text-xs uppercase tracking-wider ${audioSource === "omi" ? "text-green-500" : "text-muted-foreground"}`}>
+              OMI Device
+            </span>
+          </div>
+          
           <button
             type="button"
             onPointerDown={handleStartRecording}
@@ -211,6 +299,8 @@ export default function VocoDashboard() {
             className={`rounded-full px-8 py-4 text-sm uppercase tracking-[0.2em] border transition-all ${
               status === "recording"
                 ? "bg-primary/25 border-primary text-primary shadow-[0_0_30px_rgba(37,171,255,0.5)]"
+                : status === "omi-listening"
+                ? "bg-green-500/25 border-green-500 text-green-500 shadow-[0_0_30px_rgba(34,197,94,0.5)]"
                 : "bg-card/95 border-border text-foreground hover:border-primary/60"
             }`}
           >

@@ -13,7 +13,7 @@ export function RightSidebar({ status, monologueLines, voiceResponse }: RightSid
   const bars = Array.from({ length: 18 }, (_, i) => i)
 
   return (
-    <aside className="w-[40%] min-w-[360px] border-l border-border bg-card flex flex-col">
+    <div className="flex-1 border-l border-border bg-card flex flex-col overflow-hidden">
       <div className="h-10 border-b border-border flex items-center px-4">
         <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Intelligence Sidebar</span>
         <div className="ml-auto flex items-center gap-2">
@@ -106,6 +106,6 @@ export function RightSidebar({ status, monologueLines, voiceResponse }: RightSid
           <p>TTS ready: <span className="text-foreground">{voiceResponse ? "Yes" : "No"}</span></p>
         </div>
       </div>
-    </aside>
+    </div>
   )
 }
