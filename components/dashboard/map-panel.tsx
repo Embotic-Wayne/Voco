@@ -265,6 +265,7 @@ export function MapPanel({
     if (status === "speaking") return "Playing guidance response"
     if (status === "done") return "Responder notified"
     if (status === "error") return "Pipeline error"
+    if (status === "omi-listening") return "Receiving OMI device audio"
     return "Waiting for audio input"
   }, [status])
 

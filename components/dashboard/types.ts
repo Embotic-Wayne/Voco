@@ -1,6 +1,14 @@
-export type DemoStatus = "idle" | "recording" | "analyzing" | "speaking" | "done" | "error"
+export type DemoStatus = "idle" | "recording" | "analyzing" | "speaking" | "done" | "error" | "omi-listening"
 
-export type GraphState = "idle" | "audio" | "thinking" | "tts" | "notified"
+export type GraphState = "idle" | "audio" | "thinking" | "tts" | "notified" | "omi-processing"
+
+export type AudioSource = "microphone" | "omi"
+
+export interface OmiStatus {
+  connected: boolean
+  deviceId?: string
+  lastActivity?: Date
+}
 
 export interface Coordinates {
   lat: number

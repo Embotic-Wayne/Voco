@@ -27,6 +27,7 @@ const activeByState: Record<GraphState, string[]> = {
   thinking: ["gemini", "perplexity"],
   tts: ["tts"],
   notified: ["notified"],
+  "omi-processing": ["audio-in", "gemini"],
 }
 
 type PipelineNodeData = {

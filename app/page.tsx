@@ -6,7 +6,9 @@ import { io, type Socket } from "socket.io-client"
 import { MapPanel } from "@/components/dashboard/map-panel"
 import { RightSidebar } from "@/components/dashboard/right-sidebar"
 import { KnowledgeGraph } from "@/components/dashboard/knowledge-graph"
+import { OmiPanel } from "@/components/dashboard/omi-panel"
 import type {
+  AudioSource,
   Coordinates,
   DemoStatus,
   DistressData,
@@ -15,6 +17,7 @@ import type {
   Hospital,
   RealTimeContext,
 } from "@/components/dashboard/types"
+import type { OmiAudioEvent } from "@/lib/omi-store"
 
 const HAYWARD: Coordinates = { lat: 37.6688, lng: -122.0808, city: "Hayward, CA" }
 
@@ -119,6 +122,8 @@ export default function VocoDashboard() {
   const [errorMessage, setErrorMessage] = useState("")
   const [monitoringEnabled, setMonitoringEnabled] = useState(false)
   const [vocoActivePulse, setVocoActivePulse] = useState(false)
+  const [audioSource, setAudioSource] = useState<AudioSource>("microphone")
+  const [omiTranscript, setOmiTranscript] = useState("")
 
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -186,6 +191,7 @@ export default function VocoDashboard() {
     if (status === "speaking") return "Playing response..."
     if (status === "done") return "Hold to speak again"
     if (status === "error") return "Retry hold-to-speak"
+    if (status === "omi-listening") return "OMI Active"
     return "Hold to Speak"
   }, [status])
 
@@ -263,6 +269,52 @@ export default function VocoDashboard() {
     }
   }, [])
 
+  const handleOmiEvent = useCallback((event: OmiAudioEvent) => {
+    console.log("[Dashboard] OMI Event received:", event.status, event.id)
+
+    if (event.status === "received") {
+      setStatus("omi-listening")
+      setGraphState("audio")
+      setAudioSource("omi")
+      setMonologueLines(["Receiving audio from OMI device..."])
+    } else if (event.status === "processing") {
+      setStatus("analyzing")
+      setGraphState("thinking")
+      setAudioSource("omi")
+      setMonologueLines(["Processing OMI audio through Gemini..."])
+    } else if (event.status === "completed" && event.analysis) {
+      setAudioSource("omi")
+      setMonologueLines(event.analysis.internalMonologue || [])
+      setVoiceResponse(event.analysis.voiceResponse || "")
+      setOmiTranscript(event.analysis.transcript || "")
+
+      if (event.analysis.location) {
+        setTargetCoords(event.analysis.location)
+      }
+
+      setStatus("done")
+      setGraphState("notified")
+
+      if (event.analysis.voiceResponse) {
+        setStatus("speaking")
+        setGraphState("tts")
+        playElevenLabsAudio(event.analysis.voiceResponse)
+          .then(() => {
+            setStatus("done")
+            setGraphState("notified")
+          })
+          .catch(() => {
+            setStatus("done")
+            setGraphState("notified")
+          })
+      }
+    } else if (event.status === "error") {
+      setStatus("error")
+      setGraphState("idle")
+      setErrorMessage(event.error || "OMI processing failed")
+    }
+  }, [playElevenLabsAudio])
+
   const processAudio = useCallback(
     async (blob: Blob) => {
       setStatus("analyzing")
@@ -270,6 +322,7 @@ export default function VocoDashboard() {
       setErrorMessage("")
       setMonologueLines([])
       setVoiceResponse("")
+      setAudioSource("microphone")
       setAgentEvaluations(defaultAgentEvaluations)
       setDistressData(defaultDistressData)
 
@@ -356,18 +409,40 @@ export default function VocoDashboard() {
           </div>
           <KnowledgeGraph graphState={graphState} />
         </main>
-        <RightSidebar
-          status={status}
-          monologueLines={monologueLines}
-          voiceResponse={voiceResponse}
-          realTimeContext={realTimeContext}
-          agentEvaluations={agentEvaluations}
-          distressData={distressData}
-        />
+        <div className="flex flex-col w-[40%] min-w-[360px]">
+          <RightSidebar
+            status={status}
+            monologueLines={monologueLines}
+            voiceResponse={voiceResponse}
+            realTimeContext={realTimeContext}
+            agentEvaluations={agentEvaluations}
+            distressData={distressData}
+          />
+
+          <div className="border-t border-border p-3 bg-card/50">
+            <OmiPanel onEventReceived={handleOmiEvent} />
+
+            {omiTranscript && audioSource === "omi" && (
+              <div className="mt-3 p-3 bg-background/50 rounded border border-border">
+                <p className="text-xs text-muted-foreground mb-1">OMI Transcript:</p>
+                <p className="text-sm text-foreground">{omiTranscript}</p>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="pointer-events-none absolute bottom-6 left-1/2 z-50 w-full max-w-md -translate-x-1/2 px-4">
         <div className="pointer-events-auto flex flex-col items-center gap-2">
+          <div className="flex items-center gap-2 mb-2">
+            <span className={`text-xs uppercase tracking-wider ${audioSource === "microphone" ? "text-primary" : "text-muted-foreground"}`}>
+              Microphone
+            </span>
+            <span className="text-xs text-muted-foreground">|</span>
+            <span className={`text-xs uppercase tracking-wider ${audioSource === "omi" ? "text-green-500" : "text-muted-foreground"}`}>
+              OMI Device
+            </span>
+          </div>
           <button
             type="button"
             onClick={handleStartMonitoring}
@@ -389,6 +464,8 @@ export default function VocoDashboard() {
             className={`rounded-full px-8 py-4 text-sm uppercase tracking-[0.2em] border transition-all ${
               status === "recording"
                 ? "bg-primary/25 border-primary text-primary shadow-[0_0_30px_rgba(37,171,255,0.5)]"
+                : status === "omi-listening"
+                ? "bg-green-500/25 border-green-500 text-green-500 shadow-[0_0_30px_rgba(34,197,94,0.5)]"
                 : "bg-card/95 border-border text-foreground hover:border-primary/60"
             }`}
           >
