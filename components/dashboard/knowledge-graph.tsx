@@ -23,7 +23,8 @@ interface KnowledgeGraphProps {
 const activeByState: Record<GraphState, string[]> = {
   idle: [],
   audio: ["audio-in"],
-  thinking: ["gemini"],
+  /** Server runs Gemini + Perplexity during the same analyze phase */
+  thinking: ["gemini", "perplexity"],
   tts: ["tts"],
   notified: ["notified"],
 }
@@ -37,12 +38,12 @@ type PipelineNodeData = {
 function PipelineNode({ data }: NodeProps<Node<PipelineNodeData>>) {
   return (
     <div
-      className={`rounded border px-2 py-1 min-w-[118px] max-w-[140px] bg-[#0c101ccc] ${data.active ? "border-white/70 shadow-[0_0_0_1px_rgba(37,171,255,0.45),0_0_10px_rgba(37,171,255,0.25)]" : "border-white/20"}`}
+      className={`rounded border px-1.5 py-0.5 min-w-[76px] max-w-[92px] bg-[#0c101ccc] ${data.active ? "border-white/70 shadow-[0_0_0_1px_rgba(37,171,255,0.45),0_0_10px_rgba(37,171,255,0.25)]" : "border-white/20"}`}
     >
-      <Handle type="target" position={Position.Left} className="!w-1.5 !h-1.5 !bg-primary !border-none" />
-      <p className="text-[10px] font-semibold text-white leading-tight">{data.title}</p>
-      <p className="text-[9px] text-muted-foreground mt-0.5 leading-snug">{data.subtitle}</p>
-      <Handle type="source" position={Position.Right} className="!w-1.5 !h-1.5 !bg-primary !border-none" />
+      <Handle type="target" position={Position.Left} className="!w-1 !h-1 !bg-primary/80 !border-none" />
+      <p className="text-[8px] font-semibold text-white leading-tight">{data.title}</p>
+      <p className="text-[7px] text-muted-foreground mt-px leading-snug">{data.subtitle}</p>
+      <Handle type="source" position={Position.Right} className="!w-1 !h-1 !bg-primary/80 !border-none" />
     </div>
   )
 }
@@ -51,33 +52,67 @@ const initialNodes: Node<PipelineNodeData>[] = [
   {
     id: "audio-in",
     type: "pipeline",
-    position: { x: 8, y: 28 },
+    position: { x: 2, y: 36 },
     data: { title: "Voice Intake", subtitle: "Omi.me", active: false },
   },
   {
     id: "gemini",
     type: "pipeline",
-    position: { x: 150, y: 28 },
+    position: { x: 72, y: 36 },
     data: { title: "Reasoning Model", subtitle: "Gemini 2.5 Flash", active: false },
+  },
+  {
+    id: "perplexity",
+    type: "pipeline",
+    position: { x: 142, y: 36 },
+    data: { title: "Live Intel", subtitle: "Perplexity Sonar", active: false },
   },
   {
     id: "tts",
     type: "pipeline",
-    position: { x: 292, y: 28 },
+    position: { x: 212, y: 36 },
     data: { title: "Feedback Response", subtitle: "ElevenLabs", active: false },
   },
   {
     id: "notified",
     type: "pipeline",
-    position: { x: 434, y: 28 },
+    position: { x: 282, y: 36 },
     data: { title: "Responder Notified", subtitle: "Dispatch Trigger", active: false },
   },
 ]
 
+/** Matches inactive node border `border-white/20` */
+const PIPELINE_EDGE_COLOR = "rgba(255, 255, 255, 0.22)"
+
 const initialEdges: Edge[] = [
-  { id: "audio-gemini", source: "audio-in", target: "gemini", type: "smoothstep", markerEnd: { type: MarkerType.ArrowClosed } },
-  { id: "gemini-tts", source: "gemini", target: "tts", type: "smoothstep", markerEnd: { type: MarkerType.ArrowClosed } },
-  { id: "tts-notified", source: "tts", target: "notified", type: "smoothstep", markerEnd: { type: MarkerType.ArrowClosed } },
+  {
+    id: "audio-gemini",
+    source: "audio-in",
+    target: "gemini",
+    type: "smoothstep",
+    markerEnd: { type: MarkerType.ArrowClosed, color: PIPELINE_EDGE_COLOR, width: 10, height: 10 },
+  },
+  {
+    id: "gemini-perplexity",
+    source: "gemini",
+    target: "perplexity",
+    type: "smoothstep",
+    markerEnd: { type: MarkerType.ArrowClosed, color: PIPELINE_EDGE_COLOR, width: 10, height: 10 },
+  },
+  {
+    id: "perplexity-tts",
+    source: "perplexity",
+    target: "tts",
+    type: "smoothstep",
+    markerEnd: { type: MarkerType.ArrowClosed, color: PIPELINE_EDGE_COLOR, width: 10, height: 10 },
+  },
+  {
+    id: "tts-notified",
+    source: "tts",
+    target: "notified",
+    type: "smoothstep",
+    markerEnd: { type: MarkerType.ArrowClosed, color: PIPELINE_EDGE_COLOR, width: 10, height: 10 },
+  },
 ]
 
 export function KnowledgeGraph({ graphState }: KnowledgeGraphProps) {
@@ -85,16 +120,20 @@ export function KnowledgeGraph({ graphState }: KnowledgeGraphProps) {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
 
   const styledEdges = useMemo(() => {
-    const accent = graphState === "thinking" ? "#f4c357" : graphState === "tts" ? "#2ed392" : "#25abff"
     return edges.map((edge) => ({
       ...edge,
       style: {
-        stroke: accent,
-        strokeWidth: 1.75,
-        opacity: 0.85,
+        stroke: PIPELINE_EDGE_COLOR,
+        strokeWidth: 1.25,
+      },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: PIPELINE_EDGE_COLOR,
+        width: 10,
+        height: 10,
       },
     }))
-  }, [edges, graphState])
+  }, [edges])
 
   useEffect(() => {
     const activeSet = new Set(activeByState[graphState])

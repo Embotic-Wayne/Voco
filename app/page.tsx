@@ -1,10 +1,20 @@
 "use client"
 
-import { useCallback, useMemo, useRef, useState } from "react"
+import { motion, AnimatePresence } from "framer-motion"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { io, type Socket } from "socket.io-client"
 import { MapPanel } from "@/components/dashboard/map-panel"
 import { RightSidebar } from "@/components/dashboard/right-sidebar"
 import { KnowledgeGraph } from "@/components/dashboard/knowledge-graph"
-import type { Coordinates, DemoStatus, GraphState, Hospital } from "@/components/dashboard/types"
+import type {
+  Coordinates,
+  DemoStatus,
+  DistressData,
+  EvaluationAgents,
+  GraphState,
+  Hospital,
+  RealTimeContext,
+} from "@/components/dashboard/types"
 
 const HAYWARD: Coordinates = { lat: 37.6688, lng: -122.0808, city: "Hayward, CA" }
 
@@ -13,13 +23,87 @@ interface ProcessResponse {
   voiceResponse: string
   location: Coordinates
   hospitals: Hospital[]
+  realTimeContext?: RealTimeContext
+  agentEvaluations?: EvaluationAgents
+  distressData?: DistressData
+  audioUrl?: string
 }
+
+/** Minimal valid WAV for autoplay unlock after user gesture (mobile Safari). */
+const SILENT_WAV_DATA_URI =
+  "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAAABkYXRhAAAAAA=="
 
 const defaultHospitals: Hospital[] = [
   { id: "st-rose", name: "St. Rose Hospital", lat: 37.6646, lng: -122.0937, distance: "0.9 mi" },
   { id: "kaiser", name: "Kaiser San Leandro", lat: 37.7117, lng: -122.1478, distance: "4.2 mi" },
   { id: "eden", name: "Eden Medical Center", lat: 37.6758, lng: -122.0794, distance: "1.1 mi" },
 ]
+
+const defaultRealTimeContext: RealTimeContext = {
+  hospitals: defaultHospitals.map((hospital) => ({
+    id: hospital.id,
+    kind: "hospital",
+    name: hospital.name,
+    address: "Fallback response location (Hayward area)",
+    phone: "N/A",
+    status: "Fallback routing mode active",
+    lat: hospital.lat,
+    lng: hospital.lng,
+    distance: hospital.distance,
+  })),
+  policeStations: [
+    {
+      id: "hayward-pd",
+      kind: "police",
+      name: "Hayward Police Department",
+      address: "300 W Winton Ave, Hayward, CA",
+      phone: "(510) 293-7000",
+      status: "Fallback routing mode active",
+      lat: 37.6702,
+      lng: -122.0864,
+      distance: "1.0 mi",
+    },
+  ],
+  fireStations: [
+    {
+      id: "hayward-fire-demo",
+      kind: "fire",
+      name: "Fire station (fallback)",
+      address: "Hayward area",
+      phone: "N/A",
+      status: "Fallback routing mode active",
+      lat: 37.672,
+      lng: -122.078,
+      distance: "1.2 mi",
+    },
+  ],
+  searchArea: { lat: 37.6688, lng: -122.0808, city: "Hayward, CA" },
+  source: "Perplexity AI",
+  usedFallback: true,
+  error: "Using fallback context",
+}
+
+const defaultDistressData: DistressData = { affectedZone: null }
+
+const defaultAgentEvaluations: EvaluationAgents = {
+  impact: {
+    summary: "Awaiting incident audio and live context to assess affected populations and exposure.",
+    bullets: ["No caller-linked assessment yet", "Confirm location and nature of emergency"],
+  },
+  severity: {
+    score: 3,
+    label: "Unknown / default",
+    rationale: "Insufficient data until triage completes.",
+  },
+  guidance: {
+    dispatcherActions: [
+      "Maintain open line with caller",
+      "Verify address and callback number",
+      "Stage appropriate apparatus per local protocol",
+    ],
+    firstResponderNotes: "Use standard approach; update when on-scene size-up is available.",
+  },
+}
 
 export default function VocoDashboard() {
   const [status, setStatus] = useState<DemoStatus>("idle")
@@ -28,10 +112,73 @@ export default function VocoDashboard() {
   const [voiceResponse, setVoiceResponse] = useState("")
   const [targetCoords, setTargetCoords] = useState<Coordinates>(HAYWARD)
   const [hospitals, setHospitals] = useState<Hospital[]>(defaultHospitals)
+  const [realTimeContext, setRealTimeContext] = useState<RealTimeContext>(defaultRealTimeContext)
+  const [agentEvaluations, setAgentEvaluations] = useState<EvaluationAgents>(defaultAgentEvaluations)
+  const [distressData, setDistressData] = useState<DistressData>(defaultDistressData)
+  const [dispatchSequence, setDispatchSequence] = useState(0)
   const [errorMessage, setErrorMessage] = useState("")
+  const [monitoringEnabled, setMonitoringEnabled] = useState(false)
+  const [vocoActivePulse, setVocoActivePulse] = useState(false)
 
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
+  const socketRef = useRef<Socket | null>(null)
+  const monitoringAudioRef = useRef<HTMLAudioElement | null>(null)
+  const monitoringEnabledRef = useRef(false)
+
+  useEffect(() => {
+    monitoringEnabledRef.current = monitoringEnabled
+  }, [monitoringEnabled])
+
+  useEffect(() => {
+    const base =
+      process.env.NEXT_PUBLIC_SOCKET_URL?.replace(/\/$/, "") ||
+      (typeof window !== "undefined" ? window.location.origin : "")
+    if (!base) return
+
+    const socket = io(base, { path: "/socket.io/", transports: ["websocket", "polling"] })
+    socketRef.current = socket
+
+    socket.on("emergency_voice_trigger", (data: { audioUrl?: string }) => {
+      if (!monitoringEnabledRef.current || !data?.audioUrl) return
+
+      let el = monitoringAudioRef.current
+      if (!el) {
+        el = new Audio()
+        monitoringAudioRef.current = el
+      }
+
+      el.onended = () => setVocoActivePulse(false)
+      el.onerror = () => setVocoActivePulse(false)
+
+      setVocoActivePulse(true)
+      el.src = data.audioUrl
+      void el.play().catch(() => setVocoActivePulse(false))
+    })
+
+    return () => {
+      socket.disconnect()
+      socketRef.current = null
+    }
+  }, [])
+
+  const handleStartMonitoring = useCallback(async () => {
+    let el = monitoringAudioRef.current
+    if (!el) {
+      el = new Audio()
+      monitoringAudioRef.current = el
+    }
+    el.src = SILENT_WAV_DATA_URI
+    try {
+      await el.play()
+      el.pause()
+      el.removeAttribute("src")
+      el.load()
+    } catch {
+      /* still mark monitoring — socket playback may work on some devices */
+    }
+    setMonitoringEnabled(true)
+  }, [])
 
   const holdLabel = useMemo(() => {
     if (status === "recording") return "Release to Send"
@@ -123,6 +270,8 @@ export default function VocoDashboard() {
       setErrorMessage("")
       setMonologueLines([])
       setVoiceResponse("")
+      setAgentEvaluations(defaultAgentEvaluations)
+      setDistressData(defaultDistressData)
 
       const audioBase64 = await toBase64(blob)
       const response = await fetch("/api/process", {
@@ -139,6 +288,10 @@ export default function VocoDashboard() {
       setVoiceResponse(payload.voiceResponse ?? "")
       setTargetCoords(payload.location ?? HAYWARD)
       setHospitals(payload.hospitals?.length ? payload.hospitals : defaultHospitals)
+      setRealTimeContext(payload.realTimeContext ?? defaultRealTimeContext)
+      setAgentEvaluations(payload.agentEvaluations ?? defaultAgentEvaluations)
+      setDistressData(payload.distressData ?? defaultDistressData)
+      setDispatchSequence((current) => current + 1)
 
       setStatus("speaking")
       setGraphState("tts")
@@ -193,15 +346,40 @@ export default function VocoDashboard() {
       <div className="flex-1 flex min-h-0">
         <main className="flex-1 flex flex-col min-w-0 border-r border-border">
           <div className="flex-1 min-h-0">
-            <MapPanel targetCoords={targetCoords} hospitals={hospitals} status={status} />
+            <MapPanel
+              targetCoords={targetCoords}
+              hospitals={hospitals}
+              realTimeContext={realTimeContext}
+              dispatchSequence={dispatchSequence}
+              status={status}
+            />
           </div>
           <KnowledgeGraph graphState={graphState} />
         </main>
-        <RightSidebar status={status} monologueLines={monologueLines} voiceResponse={voiceResponse} />
+        <RightSidebar
+          status={status}
+          monologueLines={monologueLines}
+          voiceResponse={voiceResponse}
+          realTimeContext={realTimeContext}
+          agentEvaluations={agentEvaluations}
+          distressData={distressData}
+        />
       </div>
 
-      <div className="pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2">
+      <div className="pointer-events-none absolute bottom-6 left-1/2 z-50 w-full max-w-md -translate-x-1/2 px-4">
         <div className="pointer-events-auto flex flex-col items-center gap-2">
+          <button
+            type="button"
+            onClick={handleStartMonitoring}
+            disabled={monitoringEnabled}
+            className={`flex w-full md:hidden rounded-full px-6 py-3 text-xs font-semibold uppercase tracking-[0.2em] border transition-all ${
+              monitoringEnabled
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                : "bg-card/95 border-border text-foreground hover:border-emerald-500/50"
+            }`}
+          >
+            {monitoringEnabled ? "Monitoring — Voco voice sync on" : "Start Monitoring"}
+          </button>
           <button
             type="button"
             onPointerDown={handleStartRecording}
